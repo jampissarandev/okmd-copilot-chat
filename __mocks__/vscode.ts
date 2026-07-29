@@ -3,15 +3,17 @@
  *
  * The real `vscode` package is only available inside an Extension
  * Development Host — it is not on `npm` and cannot be `require`d in
- * node. This stub provides a working `LanguageModelError` surface so
- * that modules that import `vscode` for *type only* (e.g. our
- * `errorMapping.ts` which takes a `VscodeLike` and only uses the real
- * `vscode` as a default) can still be loaded by jest.
+ * node. This stub provides the surface that the v1 code uses:
  *
- * Tests that exercise the `vscode`-using branches should pass a stub
- * explicitly to the function under test. The `default` export of
- * `errorMapping.ts` is a *fallback* for production code; the test
- * suite should never exercise it.
+ *   - `LanguageModelError` factories used by `errorMapping.ts`.
+ *   - `LanguageModelTextPart` / `LanguageModelToolCallPart` for the
+ *     SSE stream parsers.
+ *
+ * Tests should not need to pass a `vscode` stub to the code under
+ * test for the things covered here; the mock lets the real `import
+ * 'vscode'` lines resolve. Code that wants to be exercised without
+ * the real `vscode` module (e.g. `errorMapping.ts`) takes an
+ * injectable `vscode` parameter — see the `VscodeLike` interface.
  */
 
 export class LanguageModelError extends Error {
@@ -40,4 +42,22 @@ export class LanguageModelTextPart {
   constructor(public readonly value: string) {}
 }
 
-export class LanguageModelToolCallPart {}
+export class LanguageModelToolCallPart {
+  constructor(
+    public readonly callId: string,
+    public readonly name: string,
+    public readonly input: object,
+  ) {}
+}
+
+/**
+ * Stub for `vscode.window` — the logger uses `createOutputChannel`.
+ * Tests that don't need the Output Channel can leave the channel
+ * methods as no-ops; tests that want to assert on log output can
+ * replace `window` via `jest.requireMock('vscode').window = ...`.
+ */
+export const window = {
+  createOutputChannel(_name: string): { appendLine(_msg: string): void; show(): void } {
+    return { appendLine: () => {}, show: () => {} };
+  },
+};

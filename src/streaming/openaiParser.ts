@@ -10,7 +10,6 @@
 import type * as vscode from 'vscode';
 import { LanguageModelTextPart, LanguageModelToolCallPart } from 'vscode';
 import { logWarn } from '../logger';
-import { parseJsonSafe } from '../utils/json';
 
 interface OpenAiChunk {
   choices?: Array<{
@@ -57,7 +56,19 @@ export async function* parseOpenAiStream(
           // Flush any accumulated tool calls as a single part.
           if (toolCallAccumulator.size > 0) {
             for (const tc of toolCallAccumulator.values()) {
-              yield new LanguageModelToolCallPart(tc.id, tc.name, parseJsonSafe(tc.arguments));
+              try {
+                // Tool-call arguments arrive as a concatenated JSON string
+                // across SSE chunks. JSON.parse throws on malformed input;
+                // we surface the failure to the Output Channel and skip the
+                // part so Copilot Chat does not receive a `{}` placeholder.
+                yield new LanguageModelToolCallPart(
+                  tc.id,
+                  tc.name,
+                  JSON.parse(tc.arguments) as object,
+                );
+              } catch (err) {
+                logWarn('Failed to parse OpenAI tool-call arguments', tc.arguments, err);
+              }
             }
           }
           return;
@@ -73,6 +84,9 @@ export async function* parseOpenAiStream(
           const delta = choice.delta;
           if (!delta) {
             continue;
+          }
+          if (signal.aborted) {
+            return;
           }
           if (delta.content) {
             yield new LanguageModelTextPart(delta.content);

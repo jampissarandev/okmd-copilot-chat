@@ -14,7 +14,6 @@
 import type * as vscode from 'vscode';
 import { LanguageModelTextPart, LanguageModelToolCallPart } from 'vscode';
 import { logWarn } from '../logger';
-import { parseJsonSafe } from '../utils/json';
 
 interface AnthropicEvent {
   type: string;
@@ -88,6 +87,9 @@ export async function* parseAnthropicStream(
             });
           }
         } else if (eventType === 'content_block_delta' && evt.delta) {
+          if (signal.aborted) {
+            return;
+          }
           if (evt.delta.type === 'text_delta' && evt.delta.text) {
             yield new LanguageModelTextPart(evt.delta.text);
           } else if (
@@ -102,7 +104,16 @@ export async function* parseAnthropicStream(
           }
         } else if (eventType === 'message_stop') {
           for (const tu of toolUseAccumulator.values()) {
-            yield new LanguageModelToolCallPart(tu.id, tu.name, parseJsonSafe(tu.input));
+            try {
+              // Tool-use input arrives as a concatenated JSON string across
+              // input_json_delta events. JSON.parse throws on malformed
+              // input; we surface the failure to the Output Channel and
+              // skip the part so Copilot Chat does not receive a `{}`
+              // placeholder.
+              yield new LanguageModelToolCallPart(tu.id, tu.name, JSON.parse(tu.input) as object);
+            } catch (err) {
+              logWarn('Failed to parse Anthropic tool-use input', tu.input, err);
+            }
           }
           return;
         }
