@@ -5,11 +5,19 @@
  *   - Auth header injection (Bearer for OpenAI endpoint, x-api-key for Anthropic)
  *   - Timeout enforcement via AbortController
  *   - One retry on 5xx or network error, with 1s backoff
+ *   - Returns the upstream response as a `ReadableStream<Uint8Array>`
+ *     so the caller (provider.ts) can stream SSE bytes into the
+ *     parser as they arrive, instead of buffering the whole body
+ *     up front. See issue #8.
  *
  * Not responsible for:
- *   - SSE parsing
+ *   - SSE parsing (the parsers consume `bodyStream` directly)
  *   - Request body shaping (that's in converters/)
- *   - Model-list management (that's in modelCache.ts)
+ *   - Model-list management (that's in `modelCache.ts` / `api.ts`)
+ *   - Mapping non-2xx responses to `vscode.LanguageModelError`
+ *     variants — the caller inspects `res.status` and decides
+ *     whether to buffer the stream into text and call
+ *     `mapHttpError`, or to stream it straight to the parser.
  */
 
 import { OKMD_API_BASE_URL, REQUEST_TIMEOUT_MS, RETRY_DELAY_MS } from './constants';
@@ -23,7 +31,7 @@ export interface OkmdRequestOptions {
 
 export interface OkmdResponse {
   status: number;
-  bodyText: string;
+  bodyStream: ReadableStream<Uint8Array>;
 }
 
 export class OkmdHttpError extends Error {
@@ -92,8 +100,24 @@ export async function postOkmd(opts: OkmdRequestOptions): Promise<OkmdResponse> 
         body: JSON.stringify(opts.body),
         signal: controller.signal,
       });
-      const bodyText = await res.text();
-      return { status: res.status, bodyText };
+      // The real `Response` always has a `body` — a `ReadableStream`
+      // (or, in Node 18+, possibly a `Readable`). We assert the
+      // shape at the boundary because the parsers expect a
+      // `ReadableStream<Uint8Array>` and any other shape (null,
+      // already-locked, or a `Readable`) would silently break the
+      // streaming contract pinned by `tests/streaming.test.ts`.
+      //
+      // The `as ReadableStream<Uint8Array>` cast is safe for the
+      // platforms this extension targets: VS Code 1.104 ships on
+      // Electron 30+, whose `net.fetch` (via undici) returns a
+      // WHATWG `ReadableStream<Uint8Array>`. The cast is
+      // belt-and-braces against a future Node where `undici` is
+      // replaced with a `Readable`-returning `fetch` polyfill —
+      // the parsers and tests would need adapting in that case.
+      if (res.body === null) {
+        throw new Error(`OKMD ${path} returned no response body`);
+      }
+      return { status: res.status, bodyStream: res.body as ReadableStream<Uint8Array> };
     } finally {
       clearTimeout(timer);
       opts.signal.removeEventListener('abort', onParentAbort);

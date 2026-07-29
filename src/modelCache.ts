@@ -7,6 +7,7 @@
 import * as vscode from 'vscode';
 import { CACHE_KEY_MODEL_LIST, CACHE_TTL_MS } from './constants';
 import { logError, logWarn } from './logger';
+import { fetchOkmdModels } from './api';
 
 export interface OkmdModel {
   id: number;
@@ -31,13 +32,13 @@ export class ModelCache {
   /**
    * Initialise the cache from disk and start the background refresh loop.
    */
-  async activate(initialFetch: () => Promise<OkmdModel[]>): Promise<void> {
+  async activate(): Promise<void> {
     const cached = this.context.globalState.get<CachedModelList>(CACHE_KEY_MODEL_LIST);
     if (cached) {
       this.applyModels(cached.models, cached.fetchedAt);
     }
     if (this.isStale()) {
-      await this.refresh(initialFetch);
+      await this.refresh();
     }
     this.scheduleNextRefresh();
   }
@@ -45,13 +46,17 @@ export class ModelCache {
   /**
    * Force-refresh the model list. Coalesces concurrent callers.
    */
-  async refresh(fetcher: () => Promise<OkmdModel[]>): Promise<void> {
+  async refresh(): Promise<void> {
     if (this.inFlight) {
       return this.inFlight;
     }
     this.inFlight = (async () => {
       try {
-        const models = await fetcher();
+        const apiKey = await this.context.secrets.get('okmd.apiKey');
+        if (!apiKey) {
+          throw new Error('API key not configured');
+        }
+        const models = await fetchOkmdModels(apiKey);
         this.applyModels(models, Date.now());
         await this.context.globalState.update(CACHE_KEY_MODEL_LIST, {
           fetchedAt: this.fetchedAt,
@@ -104,28 +109,9 @@ export class ModelCache {
     const elapsed = Date.now() - this.fetchedAt;
     const delay = Math.max(CACHE_TTL_MS - elapsed, 60_000);
     this.refreshTimer = setTimeout(() => {
-      this.refresh(this.fetchFromApi.bind(this)).catch((err) => {
+      this.refresh().catch((err) => {
         logError('Scheduled refresh failed', err);
       });
     }, delay);
-  }
-
-  /**
-   * Standalone fetch from the OKMD API. The `refresh()` method owns the
-   * coalescing; this is just the I/O.
-   */
-  private async fetchFromApi(): Promise<OkmdModel[]> {
-    const apiKey = await this.context.secrets.get('okmd.apiKey');
-    if (!apiKey) {
-      throw new Error('API key not configured');
-    }
-    const res = await fetch(`${require('./constants').OKMD_API_BASE_URL}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (!res.ok) {
-      throw new Error(`GET /models failed: ${res.status}`);
-    }
-    const data = (await res.json()) as { data: OkmdModel[] };
-    return data.data;
   }
 }

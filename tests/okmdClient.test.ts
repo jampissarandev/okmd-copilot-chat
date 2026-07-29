@@ -22,6 +22,13 @@
  * is already aborted (the 60s path is an implementation detail of
  * the inner `AbortController` and is covered by the cancellation
  * tests in `tests/cancellation.test.ts`).
+ *
+ * Streaming: the return shape is `{ status, bodyStream }` since
+ * issue #8. The mock responses build a real
+ * `ReadableStream<Uint8Array>` from a string so the tests can
+ * assert on `bodyStream` being a stream (and not a buffered
+ * string). The integration tests that exercise partial-data
+ * streaming live in `tests/streaming.test.ts`.
  */
 
 jest.mock('vscode');
@@ -40,10 +47,26 @@ import { postOkmd } from '../src/okmdClient';
 const realFetch = global.fetch;
 const notAborted = new AbortController().signal;
 
+/**
+ * Build a `Response`-like object with a real `ReadableStream<Uint8Array>`
+ * body. The body is enqueued in a single chunk and the stream is closed —
+ * tests for partial-data streaming live in `tests/streaming.test.ts`.
+ *
+ * We deliberately do NOT provide a `text()` method on the stub. The
+ * production code must not call `res.text()` on the streaming path
+ * (issue #8). If it does, the test will throw a clear error.
+ */
 function makeResponse(status: number, bodyText: string): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(bodyText));
+      controller.close();
+    },
+  });
   return {
     status,
-    text: () => Promise.resolve(bodyText),
+    body: stream,
   } as unknown as Response;
 }
 
@@ -68,7 +91,8 @@ describe('postOkmd — URL and headers', () => {
       signal: notAborted,
     });
 
-    expect(res).toEqual({ status: 200, bodyText: '{"ok":1}' });
+    expect(res.status).toBe(200);
+    expect(res.bodyStream).toBeInstanceOf(ReadableStream);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://gen.ai.kku.ac.th/okmd/api/v1/chat/completions');
@@ -93,7 +117,8 @@ describe('postOkmd — URL and headers', () => {
       signal: notAborted,
     });
 
-    expect(res).toEqual({ status: 200, bodyText: '{"ok":1}' });
+    expect(res.status).toBe(200);
+    expect(res.bodyStream).toBeInstanceOf(ReadableStream);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://gen.ai.kku.ac.th/okmd/api/v1/messages');
@@ -109,7 +134,7 @@ describe('postOkmd — URL and headers', () => {
 // --------------------------------------------------------------------------
 
 describe('postOkmd — response handling', () => {
-  test('a 200 response returns { status, bodyText } verbatim', async () => {
+  test('a 200 response returns { status, bodyStream }', async () => {
     const fetchMock = jest
       .fn()
       .mockResolvedValue(makeResponse(200, '{"choices":[{"message":{"content":"hi"}}]}'));
@@ -121,10 +146,10 @@ describe('postOkmd — response handling', () => {
       body: {},
       signal: notAborted,
     });
-    expect(res).toEqual({
-      status: 200,
-      bodyText: '{"choices":[{"message":{"content":"hi"}}]}',
-    });
+    expect(res.status).toBe(200);
+    expect(res.bodyStream).toBeInstanceOf(ReadableStream);
+    // Drain the stream so the test does not leak an open reader.
+    await res.bodyStream.cancel();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -150,6 +175,8 @@ describe('postOkmd — retry behaviour', () => {
         signal: notAborted,
       });
       expect(res.status).toBe(status);
+      // Drain the stream so the test does not leak an open reader.
+      await res.bodyStream.cancel();
     }
     // Each call hits fetch exactly once. The 400, 401, and 404
     // results are pre-loaded in `mockResolvedValueOnce` order; we
@@ -176,7 +203,7 @@ describe('postOkmd — retry behaviour', () => {
       signal: notAborted,
     });
     expect(res.status).toBe(502);
-    expect(res.bodyText).toBe('second bad gateway');
+    await res.bodyStream.cancel();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -195,7 +222,9 @@ describe('postOkmd — retry behaviour', () => {
       body: {},
       signal: notAborted,
     });
-    expect(res).toEqual({ status: 200, bodyText: '{"ok":1}' });
+    expect(res.status).toBe(200);
+    expect(res.bodyStream).toBeInstanceOf(ReadableStream);
+    await res.bodyStream.cancel();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -218,7 +247,8 @@ describe('postOkmd — retry behaviour', () => {
       body: {},
       signal: notAborted,
     });
-    expect(res).toEqual({ status: 200, bodyText: '{"ok":1}' });
+    expect(res.status).toBe(200);
+    await res.bodyStream.cancel();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

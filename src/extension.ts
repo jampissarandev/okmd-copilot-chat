@@ -19,11 +19,14 @@ export function activate(context: vscode.ExtensionContext): void {
     cache,
   );
 
-  // Wire up the manual refresh command.
+  // Wire up the manual refresh command. The cache owns its own
+  // I/O (via `fetchOkmdModels` in `api.ts`), so the handler just
+  // calls `cache.refresh()` — no bracket-access into the provider.
+  // See issue #3.
   context.subscriptions.push(
     vscode.commands.registerCommand('okmd.refreshModelList', async () => {
       try {
-        await cache.refresh(provider['fetchModelsFromApi'].bind(provider));
+        await cache.refresh();
         vscode.window.showInformationMessage(
           `OKMD model list refreshed (${cache.getModels().length} models)`,
         );
@@ -52,7 +55,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // Block on initial cache load so the picker has models immediately.
-  cache.activate(provider['fetchModelsFromApi'].bind(provider)).catch((err) => {
+  cache.activate().catch((err) => {
     logError('Initial model cache activation failed', err);
   });
 }

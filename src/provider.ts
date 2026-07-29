@@ -14,7 +14,7 @@ import { PROVIDER_ID, PROVIDER_NAME, PROVIDER_VENDOR } from './constants';
 import { getCapabilities } from './capabilities';
 import { openaiToAnthropic } from './converters/openaiToAnthropic';
 import { ModelCache, OkmdModel } from './modelCache';
-import { OkmdHttpError, postOkmd } from './okmdClient';
+import { postOkmd } from './okmdClient';
 import { parseOpenAiStream } from './streaming/openaiParser';
 import { parseAnthropicStream } from './streaming/anthropicParser';
 import { logInfo } from './logger';
@@ -32,7 +32,7 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     _token: vscode.CancellationToken,
   ): Promise<LanguageModelChatInformation[]> {
     if (this.cache.getModels().length === 0) {
-      await this.cache.refresh(this.fetchModelsFromApi.bind(this));
+      await this.cache.refresh();
     }
     return this.cache.getModels().map((m) => this.toChatInformation(m));
   }
@@ -58,7 +58,7 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     let modelId = this.cache.getIdByName(okmdName);
     if (modelId === undefined) {
       // Cache miss — refresh once and retry.
-      await this.cache.refresh(this.fetchModelsFromApi.bind(this));
+      await this.cache.refresh();
       modelId = this.cache.getIdByName(okmdName);
       if (modelId === undefined) {
         throw vscode.LanguageModelError.NotFound(`OKMD model ${okmdName} not found`);
@@ -142,16 +142,7 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
       body,
       signal,
     });
-    if (res.status >= 400) {
-      throw mapHttpError(res.status, res.bodyText, 'openai');
-    }
-    if (!res.bodyText) {
-      throw new Error('OKMD /chat/completions returned no body');
-    }
-    const stream = makeStreamFromString(res.bodyText);
-    for await (const part of parseOpenAiStream(stream, signal)) {
-      progress.report(part);
-    }
+    await this.streamResponse('openai', res, progress, signal);
   }
 
   private async streamAnthropic(
@@ -167,32 +158,39 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
       body,
       signal,
     });
-    if (res.status >= 400) {
-      throw mapHttpError(res.status, res.bodyText, 'anthropic');
-    }
-    if (!res.bodyText) {
-      throw new Error('OKMD /messages returned no body');
-    }
-    const stream = makeStreamFromString(res.bodyText);
-    for await (const part of parseAnthropicStream(stream, signal)) {
-      progress.report(part);
-    }
+    await this.streamResponse('anthropic', res, progress, signal);
   }
 
-  private async fetchModelsFromApi(): Promise<OkmdModel[]> {
-    const apiKey = await this.context.secrets.get('okmd.apiKey');
-    if (!apiKey) {
-      throw new Error('API key not configured');
+  /**
+   * Stream an OKMD response into the parser. On a non-2xx status
+   * the body is buffered into text so `mapHttpError` can inspect
+   * it; on a 2xx the body is consumed lazily by the parser, so
+   * the user sees text as it arrives. The two paths are
+   * deliberately split at the seam where `postOkmd` returns
+   * `{ status, bodyStream }` (see issue #8) so that a single
+   * dispatch function can serve both endpoints.
+   */
+  private async streamResponse(
+    endpoint: 'openai' | 'anthropic',
+    res: { status: number; bodyStream: ReadableStream<Uint8Array> },
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (res.status >= 400) {
+      // On the error path we need the body as text so
+      // `mapHttpError` can inspect it for keywords (e.g. "Invalid
+      // API key"). This is the only place we buffer; the happy
+      // path streams straight to the parser.
+      const bodyText = await readStreamToText(res.bodyStream);
+      throw mapHttpError(res.status, bodyText, endpoint);
     }
-    const { OKMD_API_BASE_URL: base } = await import('./constants.js');
-    const res = await fetch(`${base}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (!res.ok) {
-      throw new OkmdHttpError(res.status, await res.text(), `GET /models failed: ${res.status}`);
+    const source =
+      endpoint === 'anthropic'
+        ? parseAnthropicStream(res.bodyStream, signal)
+        : parseOpenAiStream(res.bodyStream, signal);
+    for await (const part of source) {
+      progress.report(part);
     }
-    const data = (await res.json()) as { data: OkmdModel[] };
-    return data.data;
   }
 }
 
@@ -203,12 +201,27 @@ function messageRole(m: vscode.LanguageModelChatRequestMessage): 'user' | 'assis
   return 'user';
 }
 
-function makeStreamFromString(text: string): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoder.encode(text));
-      controller.close();
-    },
-  });
+/**
+ * Drain a `ReadableStream<Uint8Array>` into a UTF-8 string. Used
+ * only on the error path in `streamResponse` so that
+ * `mapHttpError` can read the body text. The happy path never
+ * calls this — it streams the body straight to the parser.
+ */
+async function readStreamToText(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return text;
+  } finally {
+    reader.releaseLock();
+  }
 }
