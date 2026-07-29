@@ -100,14 +100,58 @@ export async function postOkmd(opts: OkmdRequestOptions): Promise<OkmdResponse> 
     }
   };
 
+  // Per spec 0001 §Request lifecycle: retry once on 5xx or
+  // network error. 4xx (including 429) is returned to the caller
+  // as-is — only 5xx and thrown errors are retried.
+  const first = await runOnce(attempt, opts.signal);
+  if (first.kind === 'ok') {
+    return first.response;
+  }
+  // Either a thrown error or a 5xx response. Both qualify for a
+  // single retry; if the retry also fails, surface the most
+  // recent result.
+  await sleep(RETRY_DELAY_MS, opts.signal);
+  const second = await runOnce(attempt, opts.signal);
+  if (second.kind === 'ok') {
+    return second.response;
+  }
+  if (second.kind === 'http5xx') {
+    return second.response;
+  }
+  // second.kind === 'thrown' — propagate.
+  throw second.error;
+}
+
+/**
+ * Run a single HTTP attempt and classify the result.
+ *
+ * Returns one of:
+ *   - `{ kind: 'ok' }` for a 1xx/2xx/3xx/4xx response (the caller
+ *     never has to retry 4xx — see spec 0001).
+ *   - `{ kind: 'http5xx' }` for a 5xx response. The caller decides
+ *     whether to retry.
+ *   - `{ kind: 'thrown', error }` for a thrown error (network
+ *     error, abort, etc.). The caller decides whether to retry.
+ */
+type AttemptResult =
+  | { kind: 'ok'; response: OkmdResponse }
+  | { kind: 'http5xx'; response: OkmdResponse }
+  | { kind: 'thrown'; error: unknown };
+
+async function runOnce(
+  attempt: () => Promise<OkmdResponse>,
+  signal: AbortSignal,
+): Promise<AttemptResult> {
   try {
-    return await attempt();
-  } catch (err) {
-    // Network error or timeout — retry once.
-    if (opts.signal.aborted) {
-      throw err;
+    const response = await attempt();
+    if (response.status >= 500) {
+      return { kind: 'http5xx', response };
     }
-    await sleep(RETRY_DELAY_MS, opts.signal);
-    return await attempt();
+    return { kind: 'ok', response };
+  } catch (error) {
+    if (signal.aborted) {
+      return { kind: 'thrown', error };
+    }
+    return { kind: 'thrown', error };
   }
 }

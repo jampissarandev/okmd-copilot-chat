@@ -51,6 +51,24 @@ export class LanguageModelToolCallPart {
 }
 
 /**
+ * Stub for `LanguageModelDataPart` — carries raw bytes plus a MIME
+ * type. The real 1.104 type exposes static factories
+ * (`image`/`json`/`text`); for the v1 converter only the
+ * `(data, mimeType)` constructor matters (image path). The fields
+ * are public so the converter's `part.data` and `part.mimeType`
+ * reads work without any extra plumbing.
+ */
+export class LanguageModelDataPart {
+  constructor(
+    public readonly data: Uint8Array,
+    public readonly mimeType: string,
+  ) {}
+  static image(data: Uint8Array, mime: string): LanguageModelDataPart {
+    return new LanguageModelDataPart(data, mime);
+  }
+}
+
+/**
  * Stub for `vscode.window` — the logger uses `createOutputChannel`.
  * Tests that don't need the Output Channel can leave the channel
  * methods as no-ops; tests that want to assert on log output can
