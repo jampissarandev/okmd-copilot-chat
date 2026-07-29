@@ -162,6 +162,28 @@ picker. There is no separate command palette for key management in v1.
   `AbortController` so that the user can stop a response and free the
   HTTP request immediately. See decision 9.
 
+### Token counting (`provideTokenCount`)
+
+- VS Code 1.104's `LanguageModelChatProvider` requires
+  `provideTokenCount(model, text, token)`. The 1.104 contract is
+  synchronous-looking: it returns a `Thenable<number>`. The number is
+  used by Copilot Chat to display input-token hints ("X tokens
+  remaining" etc.) and to enforce a per-request budget.
+- v1 does **not** implement a real count. The implementation throws
+  `Error('OKMD token counting is not implemented in v1')` so that
+  Copilot Chat (and any future client UI) gets a loud signal that the
+  number is unavailable rather than a silent wrong number. Throwing
+  is preferred over returning `0` or `-1`: a `0` would be
+  interpreted as "the request is empty" and a `-1` would be
+  interpreted as a valid count. See issue #14.
+- The exact strategy (chars/4 heuristic, OKMD `/tokenize` probe, or
+  `usage.prompt_tokens` from a `max_tokens: 1` call) is deferred to a
+  follow-up issue (#18). The chosen strategy will be recorded in
+  this spec under a new section and, if it is hard to reverse, in a
+  new ADR.
+- Until then, the function must remain a stub. Any patch that
+  silently swaps in a heuristic without updating this spec is a bug.
+
 ### Error handling
 
 - HTTP errors are mapped to `vscode.LanguageModelError` variants by

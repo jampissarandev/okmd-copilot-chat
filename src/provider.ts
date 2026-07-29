@@ -67,23 +67,20 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     await this.dispatch(modelId, okmdName, messages, options, progress, apiKey, token);
   }
 
-  async provideTokenCount(
+  provideTokenCount(
     _model: LanguageModelChatInformation,
     _text: string | LanguageModelChatRequestMessage,
     _token: vscode.CancellationToken,
-  ): Promise<number> {
-    // Rough heuristic: 1 token ≈ 4 characters for English text.
-    if (typeof _text === 'string') {
-      return Math.ceil(_text.length / 4);
-    }
-    // For request messages, sum up text parts.
-    let total = 0;
-    for (const part of _text.content) {
-      if (part instanceof vscode.LanguageModelTextPart) {
-        total += Math.ceil(part.value.length / 4);
-      }
-    }
-    return total;
+  ): Thenable<number> {
+    // v1 does not implement a real token count. The 1.104 contract
+    // requires *some* `Thenable<number>`; we throw so that Copilot
+    // Chat (and any future client UI that reads this number) gets a
+    // loud signal that the value is unavailable, rather than a
+    // silently-wrong number from a chars/4 heuristic. Per spec 0001
+    // §Token counting this function **must remain a stub** until
+    // issue #18 lands; any patch that silently swaps in a heuristic
+    // without updating the spec is a bug.
+    throw new Error('OKMD token counting is not implemented in v1');
   }
 
   private toChatInformation(m: OkmdModel): LanguageModelChatInformation {
