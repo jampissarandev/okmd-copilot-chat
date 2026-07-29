@@ -1,0 +1,10 @@
+node_modules/
+out/
+*.vsix
+.DS_Store
+*.log
+coverage/
+tests/
+__mocks__/
+docs/
+.eslintcache

@@ -1,0 +1,72 @@
+{
+  "name": "okmd-for-copilot-chat",
+  "displayName": "OKMD for Copilot Chat",
+  "description": "Use OKMD AI models in GitHub Copilot Chat via BYOK",
+  "version": "0.1.0",
+  "publisher": "JamPissaran",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.104.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "okmd",
+    "copilot",
+    "byok",
+    "language-model"
+  ],
+  "activationEvents": [
+    "onLanguageModelChatProvider:okmd"
+  ],
+  "main": "./out/extension.js",
+  "files": [
+    "out/**",
+    "README.md",
+    "LICENSE"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "okmd.refreshModelList",
+        "title": "OKMD: Refresh Model List",
+        "category": "OKMD"
+      },
+      {
+        "command": "okmd.refreshToolCapability",
+        "title": "OKMD: Refresh Tool Capability",
+        "category": "OKMD"
+      },
+      {
+        "command": "okmd.showLogs",
+        "title": "OKMD: Show Logs",
+        "category": "OKMD"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -watch -p ./tsconfig.json",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "test": "jest",
+    "package:vsix": "vsce package"
+  },
+  "dependencies": {
+    "@vscode/vsce": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.104.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0"
+  }
+}
