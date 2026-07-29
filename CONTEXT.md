@@ -71,3 +71,12 @@ Claude's extended thinking feature, exposed by OKMD's `/messages` endpoint.
 **Not supported in v1** (decision 17). The `/chat/completions` endpoint
 cannot forward thinking parameters. If `reasoning` arrives in a response, it
 is logged to the Output Channel and dropped.
+## System Prompt
+
+In the pre-1.104 `vscode.lm` API, providers could read a `System`-role
+message from Copilot and forward it to the model. In VS Code 1.104+
+(`LanguageModelChatRequestMessage` and
+`LanguageModelChatMessageRole = { User, Assistant }`), **no system-prompt
+channel exists** between Copilot and a BYOK provider. The OKMD extension
+therefore does not populate the Anthropic `body.system` field. See
+ADR-0004. This is an upstream-API gap, not a bug in this extension.

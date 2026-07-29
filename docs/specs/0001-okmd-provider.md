@@ -79,6 +79,14 @@ picker. There is no separate command palette for key management in v1.
 20. As a Copilot Chat user, I want system messages from Copilot to be
     forwarded to the OKMD API, so that Copilot's internal prompts still
     work.
+
+    **Not implementable in 1.104+.** VS Code 1.104's `vscode.lm` contract
+    exposes only `User` and `Assistant` roles on
+    `LanguageModelChatRequestMessage.role`; there is no system-message
+    channel from Copilot to the provider. See ADR-0004. Future versions
+    may add a system-prompt field; until then, Anthropic models served via
+    this extension receive no `system` field. Documented here so the gap is
+    visible — not silently dropped.
 21. As a Copilot Chat user, I want image attachments in messages to be
     forwarded to OKMD with a log warning, so that I find out if a model
     supports images without silent failure.
@@ -130,8 +138,9 @@ picker. There is no separate command palette for key management in v1.
   - For OpenAI-compatible models, `vscode.lm` messages are forwarded with
     minimal restructuring.
   - For Anthropic-compatible models, the OpenAI-shaped messages are
-    converted to Anthropic shape (system prompt is split out, message
-    content becomes a string or content blocks). See decision 33.
+    converted to Anthropic shape (message content becomes a string or
+    content blocks). The Anthropic `system` field is **not** populated —
+    see ADR-0004 for the reason. See decision 33.
 - Forwarded body parameters are filtered per endpoint. The OpenAI
   endpoint receives `temperature`, `max_tokens`, `stream`. The Anthropic
   endpoint receives `temperature`, `max_tokens`, `top_p`, `top_k`,
@@ -240,7 +249,7 @@ picker. There is no separate command palette for key management in v1.
   base URL in the future, the change is one line in `constants.ts`.
 - The extension depends only on the runtime fetch, so the bundle ships
   with zero third-party runtime dependencies.
-- The three existing ADRs (mixed-endpoint routing, id-mapping lookup,
-  model-list cache) define the three highest-risk decisions in the
-  design. Future changes to those areas must update or supersede the
-  ADRs.
+- The four existing ADRs (mixed-endpoint routing, id-mapping lookup,
+  model-list cache, no-system-prompt-channel) define the highest-risk
+  decisions in the design. Future changes to those areas must update or
+  supersede the ADRs.
