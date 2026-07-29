@@ -17,7 +17,8 @@ import { ModelCache, OkmdModel } from './modelCache';
 import { OkmdHttpError, postOkmd } from './okmdClient';
 import { parseOpenAiStream } from './streaming/openaiParser';
 import { parseAnthropicStream } from './streaming/anthropicParser';
-import { logInfo, logWarn } from './logger';
+import { logInfo } from './logger';
+import { mapHttpError } from './errorMapping';
 
 export class OkmdChatProvider implements LanguageModelChatProvider {
   constructor(
@@ -214,46 +215,6 @@ function cancellationTokenToAbortSignal(token: vscode.CancellationToken): AbortS
   }
   token.onCancellationRequested(() => controller.abort());
   return controller.signal;
-}
-
-/**
- * Map HTTP status + body to a vscode.LanguageModelError.
- *
- * Per decision 13: trust the status code first, parse the body for keywords
- * as a fallback. Log all non-2xx responses to the Output Channel.
- */
-function mapHttpError(
-  status: number,
-  bodyText: string,
-  endpoint: 'openai' | 'anthropic',
-): vscode.LanguageModelError {
-  logWarn(`OKMD ${endpoint} error ${status}: ${bodyText.slice(0, 500)}`);
-
-  // OKMD quirk: it returns 401 for many distinct failure modes. Try to
-  // disambiguate by message body.
-  if (status === 401 || status === 403) {
-    if (/invalid api key/i.test(bodyText)) {
-      return vscode.LanguageModelError.NoPermissions('Invalid OKMD API key');
-    }
-    if (/invalid model/i.test(bodyText)) {
-      return vscode.LanguageModelError.NotFound('Invalid OKMD model');
-    }
-    if (/reached daily limit/i.test(bodyText)) {
-      return vscode.LanguageModelError.Blocked('Model daily quota reached');
-    }
-    return vscode.LanguageModelError.NoPermissions(`OKMD auth failed (${status})`);
-  }
-  if (status === 429) {
-    return vscode.LanguageModelError.Blocked('OKMD rate limit hit');
-  }
-  if (status >= 500) {
-    return vscode.LanguageModelError.Blocked(`OKMD server error (${status})`);
-  }
-  if (status === 400 && /messages is required/i.test(bodyText)) {
-    return vscode.LanguageModelError.NotFound('No messages provided to OKMD');
-  }
-  // Fallback for unexpected status codes.
-  return vscode.LanguageModelError.NotFound(`OKMD error ${status}: ${bodyText.slice(0, 200)}`);
 }
 
 function makeStreamFromString(text: string): ReadableStream<Uint8Array> {

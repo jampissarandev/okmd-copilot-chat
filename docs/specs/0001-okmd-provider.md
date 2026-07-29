@@ -166,6 +166,36 @@ picker. There is no separate command palette for key management in v1.
   return 401; the keyword parse disambiguates them. See decision 13.
 - All non-2xx responses are logged to the Output Channel with a 500-char
   preview of the body.
+- The mapping lives in `src/errorMapping.ts` as a pure function
+  `mapHttpError(status, bodyText, endpoint, vscode?, log?)`. The
+  `vscode` and `log` parameters are optional and exist only for
+  testability; production callers omit them. Tests pass a stub
+  `VscodeLike` that records which factory was called and asserts on
+  the returned error's `code` (the public variant identifier) and
+  `message`.
+- **Variant choice in VS Code 1.104.** The 1.104 `LanguageModelError`
+  API exposes only three factory methods: `NoPermissions`, `Blocked`,
+  and `NotFound`. There is no `InvalidRequest` or `Unknown` factory
+  (these were dropped in 1.104). The mapping reserves each variant for
+  one semantic:
+  - `NoPermissions` — the API key is missing, malformed, or
+    unauthorized. Used for 401/403 when the body does not identify
+    the specific failure mode, and for 401/403 with the
+    `Invalid API key` keyword.
+  - `NotFound` — the resource the user asked for does not exist. Used
+    for 401/403 with the `Invalid model` keyword, and for the
+    "model id not in cache after refresh" branch in `provider.ts`.
+  - `Blocked` — the request was rejected by the server. Used for
+    429 (rate limit), 5xx (server error), 400 with the
+    `messages is required` keyword (client-side validation failure —
+    the extension sent an empty `messages` array), and the generic
+    catch-all for unrecognised 4xx and 5xx statuses.
+  Rationale: a 400 with `messages is required` is a client-side
+  validation failure, not a missing-resource failure, so it is
+  wrong to surface it as `NotFound` (which would tell the user
+  "model not found"). Similarly, a 500 or 418 surfaced as `NotFound`
+  is misleading. `Blocked` is the closest 1.104 generic variant
+  for "the request was refused". See issues #11 and #15.
 
 ### Authentication storage
 
