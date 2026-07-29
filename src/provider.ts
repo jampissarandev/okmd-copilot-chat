@@ -19,6 +19,7 @@ import { parseOpenAiStream } from './streaming/openaiParser';
 import { parseAnthropicStream } from './streaming/anthropicParser';
 import { logInfo } from './logger';
 import { mapHttpError } from './errorMapping';
+import { cancellationTokenToAbortSignal } from './utils/cancellation';
 
 export class OkmdChatProvider implements LanguageModelChatProvider {
   constructor(
@@ -203,18 +204,6 @@ function messageRole(m: vscode.LanguageModelChatRequestMessage): 'user' | 'assis
     return 'assistant';
   }
   return 'user';
-}
-
-/**
- * Convert a VS Code CancellationToken to a standard AbortSignal.
- */
-function cancellationTokenToAbortSignal(token: vscode.CancellationToken): AbortSignal {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) {
-    controller.abort();
-  }
-  token.onCancellationRequested(() => controller.abort());
-  return controller.signal;
 }
 
 function makeStreamFromString(text: string): ReadableStream<Uint8Array> {

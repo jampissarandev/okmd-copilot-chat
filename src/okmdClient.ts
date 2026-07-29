@@ -56,6 +56,16 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export async function postOkmd(opts: OkmdRequestOptions): Promise<OkmdResponse> {
+  // Short-circuit when the caller's CancellationToken is already
+  // cancelled: spec 0001 Story 10 says a cancelled request must not
+  // hit the network. Without this, the first `attempt()` would still
+  // call `fetch` with an already-aborted signal and the fetch would
+  // throw — but that wastes one event-loop tick and risks ordering
+  // issues with retry. Detecting it here is cheaper and clearer.
+  if (opts.signal.aborted) {
+    throw new Error('aborted');
+  }
+
   const path = opts.endpoint === 'anthropic' ? '/messages' : '/chat/completions';
   const url = `${OKMD_API_BASE_URL}${path}`;
 

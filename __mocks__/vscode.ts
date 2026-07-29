@@ -61,3 +61,41 @@ export const window = {
     return { appendLine: () => {}, show: () => {} };
   },
 };
+
+/**
+ * Minimal `CancellationToken` shape used by
+ * `cancellationTokenToAbortSignal` in `src/utils/cancellation.ts`.
+ * The mock provides a `CancellationTokenSource` so tests can drive
+ * the cancel event manually.
+ */
+export interface CancellationToken {
+  isCancellationRequested: boolean;
+  onCancellationRequested(listener: () => void): { dispose(): void };
+}
+
+export class CancellationTokenSource {
+  private listeners: Array<() => void> = [];
+  private _isCancellationRequested = false;
+  get isCancellationRequested(): boolean {
+    return this._isCancellationRequested;
+  }
+  get token(): CancellationToken {
+    const listeners = this.listeners;
+    return {
+      isCancellationRequested: this._isCancellationRequested,
+      onCancellationRequested: (cb: () => void) => {
+        listeners.push(cb);
+        return { dispose: () => {} };
+      },
+    };
+  }
+  cancel(): void {
+    if (this._isCancellationRequested) {
+      return;
+    }
+    this._isCancellationRequested = true;
+    for (const l of this.listeners) {
+      l();
+    }
+  }
+}

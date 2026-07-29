@@ -52,6 +52,11 @@ picker. There is no separate command palette for key management in v1.
 10. As a Copilot Chat user, I want to cancel a long-running response and
     have the network request stop, so that I do not burn quota on a
     response I no longer need.
+
+    **Implemented in v1 via #16.** The `CancellationToken` is bridged
+    to an `AbortSignal` in `src/utils/cancellation.ts`; both the HTTP
+    client and the SSE parsers honour the signal. A pre-aborted
+    token short-circuits the request without calling `fetch`.
 11. As a Copilot Chat user who is offline, I want the previously known
     OKMD models to still appear in the picker, so that the extension is
     not useless on a plane.
