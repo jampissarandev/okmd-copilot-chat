@@ -6,9 +6,9 @@
 import * as vscode from 'vscode';
 import {
   LanguageModelChatInformation,
-  LanguageModelChatMessage,
   LanguageModelChatProvider,
-  LanguageModelChatRequestOptions,
+  LanguageModelChatRequestMessage,
+  ProvideLanguageModelChatResponseOptions,
 } from 'vscode';
 import { PROVIDER_ID, PROVIDER_NAME, PROVIDER_VENDOR } from './constants';
 import { getCapabilities } from './capabilities';
@@ -17,7 +17,7 @@ import { ModelCache, OkmdModel } from './modelCache';
 import { OkmdHttpError, postOkmd } from './okmdClient';
 import { parseOpenAiStream } from './streaming/openaiParser';
 import { parseAnthropicStream } from './streaming/anthropicParser';
-import { logError, logInfo, logWarn } from './logger';
+import { logInfo, logWarn } from './logger';
 
 export class OkmdChatProvider implements LanguageModelChatProvider {
   constructor(
@@ -26,7 +26,7 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
   ) {}
 
   async provideLanguageModelChatInformation(
-    options: { silent: boolean },
+    _options: { readonly silent: boolean },
     _token: vscode.CancellationToken,
   ): Promise<LanguageModelChatInformation[]> {
     if (this.cache.getModels().length === 0) {
@@ -37,14 +37,15 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
 
   async provideLanguageModelChatResponse(
     model: LanguageModelChatInformation,
-    messages: readonly LanguageModelChatMessage[],
-    options: LanguageModelChatRequestOptions,
+    messages: readonly LanguageModelChatRequestMessage[],
+    options: ProvideLanguageModelChatResponseOptions,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken,
-  ): Promise<vscode.LanguageModelChatResponse> {
+  ): Promise<void> {
     const apiKey = await this.context.secrets.get('okmd.apiKey');
     if (!apiKey) {
-      throw new vscode.LanguageModelError(
-        vscode.LanguageModelError.NoPermissions('OKMD API key not configured. Open Copilot → Manage Models → OKMD to add it.'),
+      throw vscode.LanguageModelError.NoPermissions(
+        'OKMD API key not configured. Open Copilot → Manage Models → OKMD to add it.',
       );
     }
 
@@ -52,19 +53,35 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     const okmdName = model.id.startsWith(`${PROVIDER_ID}/`)
       ? model.id.slice(PROVIDER_ID.length + 1)
       : model.id;
-    const modelId = this.cache.getIdByName(okmdName);
+    let modelId = this.cache.getIdByName(okmdName);
     if (modelId === undefined) {
       // Cache miss — refresh once and retry.
       await this.cache.refresh(this.fetchModelsFromApi.bind(this));
-      const retryId = this.cache.getIdByName(okmdName);
-      if (retryId === undefined) {
-        throw new vscode.LanguageModelError(
-          vscode.LanguageModelError.NotFound(`OKMD model ${okmdName} not found`),
-        );
+      modelId = this.cache.getIdByName(okmdName);
+      if (modelId === undefined) {
+        throw vscode.LanguageModelError.NotFound(`OKMD model ${okmdName} not found`);
       }
-      return this.dispatch(retryId, okmdName, messages, options, apiKey, token);
     }
-    return this.dispatch(modelId, okmdName, messages, options, apiKey, token);
+    await this.dispatch(modelId, okmdName, messages, options, progress, apiKey, token);
+  }
+
+  async provideTokenCount(
+    _model: LanguageModelChatInformation,
+    _text: string | LanguageModelChatRequestMessage,
+    _token: vscode.CancellationToken,
+  ): Promise<number> {
+    // Rough heuristic: 1 token ≈ 4 characters for English text.
+    if (typeof _text === 'string') {
+      return Math.ceil(_text.length / 4);
+    }
+    // For request messages, sum up text parts.
+    let total = 0;
+    for (const part of _text.content) {
+      if (part instanceof vscode.LanguageModelTextPart) {
+        total += Math.ceil(part.value.length / 4);
+      }
+    }
+    return total;
   }
 
   private toChatInformation(m: OkmdModel): LanguageModelChatInformation {
@@ -86,41 +103,45 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
   private async dispatch(
     modelId: number,
     modelName: string,
-    messages: readonly LanguageModelChatMessage[],
-    _options: LanguageModelChatRequestOptions,
+    messages: readonly LanguageModelChatRequestMessage[],
+    _options: ProvideLanguageModelChatResponseOptions,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     apiKey: string,
     token: vscode.CancellationToken,
-  ): Promise<vscode.LanguageModelChatResponse> {
+  ): Promise<void> {
     const caps = getCapabilities(modelName);
     logInfo(`Dispatching to ${caps.endpoint} for model ${modelName}`);
 
     if (caps.endpoint === 'anthropic') {
       const body = openaiToAnthropic(modelId, messages);
-      return this.streamAnthropic(body, apiKey, token);
+      await this.streamAnthropic(body, progress, apiKey, token);
+    } else {
+      const body = {
+        model: modelId,
+        messages: messages.map((m) => ({
+          role: messageRole(m),
+          content: m.content
+            .map((p) => (p instanceof vscode.LanguageModelTextPart ? p.value : ''))
+            .join(''),
+        })),
+        stream: true,
+      };
+      await this.streamOpenAI(body, progress, apiKey, token);
     }
-    const body = {
-      model: modelId,
-      messages: messages.map((m) => ({
-        role: messageRole(m),
-        content: m.content
-          .map((p) => (p instanceof vscode.LanguageModelTextPart ? p.value : ''))
-          .join(''),
-      })),
-      stream: true,
-    };
-    return this.streamOpenAI(body, apiKey, token);
   }
 
   private async streamOpenAI(
     body: unknown,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     apiKey: string,
     token: vscode.CancellationToken,
-  ): Promise<vscode.LanguageModelChatResponse> {
+  ): Promise<void> {
+    const signal = cancellationTokenToAbortSignal(token);
     const res = await postOkmd({
       endpoint: 'openai',
       apiKey,
       body,
-      signal: token,
+      signal,
     });
     if (res.status >= 400) {
       throw mapHttpError(res.status, res.bodyText, 'openai');
@@ -128,25 +149,24 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     if (!res.bodyText) {
       throw new Error('OKMD /chat/completions returned no body');
     }
-    // The OpenAI client expects a streaming response when stream:true.
-    // Wrap the buffered text in a fake ReadableStream so the parser sees
-    // one chunk (non-streaming fallback for the rare non-streaming response).
     const stream = makeStreamFromString(res.bodyText);
-    return {
-      stream: parseOpenAiStream(stream, token),
-    } as unknown as vscode.LanguageModelChatResponse;
+    for await (const part of parseOpenAiStream(stream, signal)) {
+      progress.report(part);
+    }
   }
 
   private async streamAnthropic(
     body: unknown,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     apiKey: string,
     token: vscode.CancellationToken,
-  ): Promise<vscode.LanguageModelChatResponse> {
+  ): Promise<void> {
+    const signal = cancellationTokenToAbortSignal(token);
     const res = await postOkmd({
       endpoint: 'anthropic',
       apiKey,
       body,
-      signal: token,
+      signal,
     });
     if (res.status >= 400) {
       throw mapHttpError(res.status, res.bodyText, 'anthropic');
@@ -155,9 +175,9 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
       throw new Error('OKMD /messages returned no body');
     }
     const stream = makeStreamFromString(res.bodyText);
-    return {
-      stream: parseAnthropicStream(stream, token),
-    } as unknown as vscode.LanguageModelChatResponse;
+    for await (const part of parseAnthropicStream(stream, signal)) {
+      progress.report(part);
+    }
   }
 
   private async fetchModelsFromApi(): Promise<OkmdModel[]> {
@@ -165,7 +185,7 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     if (!apiKey) {
       throw new Error('API key not configured');
     }
-    const base = require('./constants').OKMD_API_BASE_URL;
+    const { OKMD_API_BASE_URL: base } = await import('./constants.js');
     const res = await fetch(`${base}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
@@ -177,14 +197,23 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
   }
 }
 
-function messageRole(m: vscode.LanguageModelChatMessage): 'system' | 'user' | 'assistant' {
-  if (m.role === vscode.LanguageModelChatMessageRole.System) {
-    return 'system';
-  }
+function messageRole(m: vscode.LanguageModelChatRequestMessage): 'user' | 'assistant' {
   if (m.role === vscode.LanguageModelChatMessageRole.Assistant) {
     return 'assistant';
   }
   return 'user';
+}
+
+/**
+ * Convert a VS Code CancellationToken to a standard AbortSignal.
+ */
+function cancellationTokenToAbortSignal(token: vscode.CancellationToken): AbortSignal {
+  const controller = new AbortController();
+  if (token.isCancellationRequested) {
+    controller.abort();
+  }
+  token.onCancellationRequested(() => controller.abort());
+  return controller.signal;
 }
 
 /**
@@ -204,42 +233,27 @@ function mapHttpError(
   // disambiguate by message body.
   if (status === 401 || status === 403) {
     if (/invalid api key/i.test(bodyText)) {
-      return new vscode.LanguageModelError(
-        vscode.LanguageModelError.NoPermissions('Invalid OKMD API key'),
-      );
+      return vscode.LanguageModelError.NoPermissions('Invalid OKMD API key');
     }
     if (/invalid model/i.test(bodyText)) {
-      return new vscode.LanguageModelError(
-        vscode.LanguageModelError.NotFound('Invalid OKMD model'),
-      );
+      return vscode.LanguageModelError.NotFound('Invalid OKMD model');
     }
     if (/reached daily limit/i.test(bodyText)) {
-      return new vscode.LanguageModelError(
-        vscode.LanguageModelError.Blocked('Model daily quota reached'),
-      );
+      return vscode.LanguageModelError.Blocked('Model daily quota reached');
     }
-    return new vscode.LanguageModelError(
-      vscode.LanguageModelError.NoPermissions(`OKMD auth failed (${status})`),
-    );
+    return vscode.LanguageModelError.NoPermissions(`OKMD auth failed (${status})`);
   }
   if (status === 429) {
-    return new vscode.LanguageModelError(
-      vscode.LanguageModelError.Blocked('OKMD rate limit hit'),
-    );
+    return vscode.LanguageModelError.Blocked('OKMD rate limit hit');
   }
   if (status >= 500) {
-    return new vscode.LanguageModelError(
-      vscode.LanguageModelError.Blocked(`OKMD server error (${status})`),
-    );
+    return vscode.LanguageModelError.Blocked(`OKMD server error (${status})`);
   }
   if (status === 400 && /messages is required/i.test(bodyText)) {
-    return new vscode.LanguageModelError(
-      vscode.LanguageModelError.InvalidRequest('No messages provided to OKMD'),
-    );
+    return vscode.LanguageModelError.NotFound('No messages provided to OKMD');
   }
-  return new vscode.LanguageModelError(
-    vscode.LanguageModelError.Unknown(`OKMD error ${status}: ${bodyText.slice(0, 200)}`),
-  );
+  // Fallback for unexpected status codes.
+  return vscode.LanguageModelError.NotFound(`OKMD error ${status}: ${bodyText.slice(0, 200)}`);
 }
 
 function makeStreamFromString(text: string): ReadableStream<Uint8Array> {

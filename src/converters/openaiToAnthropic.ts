@@ -10,7 +10,7 @@
  * system string.
  */
 
-import type * as vscode from 'vscode';
+import * as vscode from 'vscode';
 
 export interface AnthropicMessage {
   role: 'user' | 'assistant';
@@ -31,20 +31,17 @@ export interface AnthropicRequestBody {
 
 export function openaiToAnthropic(
   modelId: number,
-  vscodeMessages: readonly vscode.LanguageModelChatMessage[],
+  vscodeMessages: readonly vscode.LanguageModelChatRequestMessage[],
 ): AnthropicRequestBody {
-  const systemParts: string[] = [];
   const messages: AnthropicMessage[] = [];
 
   for (const m of vscodeMessages) {
     const role = m.role;
-    if (role === vscode.LanguageModelChatMessageRole.System) {
-      systemParts.push(messageToText(m));
-      continue;
+    if (role === vscode.LanguageModelChatMessageRole.Assistant) {
+      messages.push({ role: 'assistant', content: messageToBlocks(m) });
+    } else {
+      messages.push({ role: 'user', content: messageToBlocks(m) });
     }
-    const anthropicRole: 'user' | 'assistant' =
-      role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'user';
-    messages.push({ role: anthropicRole, content: messageToBlocks(m) });
   }
 
   const body: AnthropicRequestBody = {
@@ -53,26 +50,10 @@ export function openaiToAnthropic(
     stream: true,
     max_tokens: 4096,
   };
-  if (systemParts.length > 0) {
-    body.system = systemParts.join('\n\n');
-  }
   return body;
 }
 
-function messageToText(m: vscode.LanguageModelChatMessage): string {
-  // System messages in vscode.lm are always plain text. We can safely
-  // extract just the text content.
-  return m.content
-    .map((part) => {
-      if (part instanceof vscode.LanguageModelTextPart) {
-        return part.value;
-      }
-      return '';
-    })
-    .join('');
-}
-
-function messageToBlocks(m: vscode.LanguageModelChatMessage): string | AnthropicContentBlock[] {
+function messageToBlocks(m: vscode.LanguageModelChatRequestMessage): string | AnthropicContentBlock[] {
   // If the message is pure text, send a string for compatibility with older
   // Claude models. If it has any image parts, send blocks.
   let hasImage = false;

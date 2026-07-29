@@ -14,6 +14,7 @@
 import type * as vscode from 'vscode';
 import { LanguageModelTextPart, LanguageModelToolCallPart } from 'vscode';
 import { logWarn } from '../logger';
+import { parseJsonSafe } from '../utils/json';
 
 interface AnthropicEvent {
   type: string;
@@ -101,7 +102,7 @@ export async function* parseAnthropicStream(
           }
         } else if (eventType === 'message_stop') {
           for (const tu of toolUseAccumulator.values()) {
-            yield new LanguageModelToolCallPart(tu.id, tu.name, tu.input);
+            yield new LanguageModelToolCallPart(tu.id, tu.name, parseJsonSafe(tu.input));
           }
           return;
         }

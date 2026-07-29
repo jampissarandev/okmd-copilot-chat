@@ -10,6 +10,7 @@
 import type * as vscode from 'vscode';
 import { LanguageModelTextPart, LanguageModelToolCallPart } from 'vscode';
 import { logWarn } from '../logger';
+import { parseJsonSafe } from '../utils/json';
 
 interface OpenAiChunk {
   choices?: Array<{
@@ -56,7 +57,7 @@ export async function* parseOpenAiStream(
           // Flush any accumulated tool calls as a single part.
           if (toolCallAccumulator.size > 0) {
             for (const tc of toolCallAccumulator.values()) {
-              yield new LanguageModelToolCallPart(tc.id, tc.name, tc.arguments);
+              yield new LanguageModelToolCallPart(tc.id, tc.name, parseJsonSafe(tc.arguments));
             }
           }
           return;
