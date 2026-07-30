@@ -22,7 +22,7 @@ function makeProvider(): OkmdChatProvider {
   // `OkmdChatProvider`'s constructor takes an `ExtensionContext` and
   // a `ModelCache`. The methods we exercise here don't read either,
   // so we pass empty objects cast to the right shape.
-  return new OkmdChatProvider({} as never, {} as never);
+  return new OkmdChatProvider({} as never, { onDidChange: jest.fn() } as never);
 }
 
 describe('OkmdChatProvider.provideTokenCount (v1 stub)', () => {

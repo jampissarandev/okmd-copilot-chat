@@ -28,7 +28,29 @@
     "LICENSE"
   ],
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "okmd",
+        "displayName": "OKMD",
+        "configuration": {
+          "properties": {
+            "apiKey": {
+              "type": "string",
+              "secret": true,
+              "description": "API key from playground.okmd.or.th → API Platform",
+              "title": "OKMD API Key"
+            }
+          },
+          "required": ["apiKey"]
+        }
+      }
+    ],
     "commands": [
+      {
+        "command": "okmd.manageApiKey",
+        "title": "OKMD: Set API Key",
+        "category": "OKMD"
+      },
       {
         "command": "okmd.refreshModelList",
         "title": "OKMD: Refresh Model List",

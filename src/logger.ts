@@ -27,6 +27,17 @@ function format(message: string, args: unknown[]): string {
     return message;
   }
   return `${message} ${args
-    .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
+    .map((a) => {
+      if (typeof a === 'string') {
+        return a;
+      }
+      if (a instanceof Error) {
+        // `JSON.stringify(new Error('x'))` returns `{}` because
+        // `message` is non-enumerable. `String(err)` gives the
+        // full stack, which is what we want for diagnostics.
+        return a.stack ?? a.message ?? String(a);
+      }
+      return JSON.stringify(a);
+    })
     .join(' ')}`;
 }

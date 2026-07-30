@@ -56,6 +56,9 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     options: { readonly silent: boolean },
     _token: vscode.CancellationToken,
   ): Promise<LanguageModelChatInformation[]> {
+    logInfo(
+      `[picker] provideLanguageModelChatInformation called: silent=${options.silent} cache=${this.cache.getModels().length}`,
+    );
     // 1. BYOK path — VS Code 1.104+ may pass the API key in
     //    `options.configuration`. Mirror the opencode-copilot-chat
     //    `getConfiguredApiKey` pattern so the vendor does not
@@ -90,6 +93,9 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     //    the picker (the same root cause ADR-0005 fixes on the
     //    activation side).
     if (!apiKey) {
+      logInfo(
+        '[picker] no apiKey yet (configuration=undefined) — returning [] and waiting for VS Code to re-query after BYOK resolves',
+      );
       return [];
     }
 
@@ -120,9 +126,16 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     }
     let models = this.cache.getModels();
     if (models.length === 0) {
+      logWarn(
+        '[picker] cache still empty after refresh — falling back to BUNDLED_FALLBACK_MODELS',
+      );
       models = BUNDLED_FALLBACK_MODELS;
     }
-    return Promise.all(models.map((m) => this.toChatInformation(m, apiKey)));
+    const result = await Promise.all(
+      models.map((m) => this.toChatInformation(m, apiKey)),
+    );
+    logInfo(`[picker] returning ${result.length} models`);
+    return result;
   }
 
   async provideLanguageModelChatResponse(

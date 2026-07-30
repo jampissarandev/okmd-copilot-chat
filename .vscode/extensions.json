@@ -1,0 +1,23 @@
+{
+  // VS Code will offer to install these recommended extensions when
+  // someone opens the workspace. The Extension Development Host
+  // launched via F5 (see launch.json) inherits the host's installed
+  // extensions, so the smoke test only works if Copilot Chat and
+  // GitHub Copilot are already installed on the host VS Code.
+  "recommendations": [
+    // Required for the OKMD provider to be reachable from the
+    // model picker. Without this the chat view has nowhere to
+    // surface BYOK models.
+    "GitHub.copilot-chat",
+    // Required for `vscode.lm` API access. GitHub Copilot Chat
+    // depends on this; listing it explicitly makes the smoke test
+    // setup self-documenting.
+    "GitHub.copilot"
+  ],
+  // Extensions known to interfere with the picker (e.g. duplicate
+  // language-model providers, model-rewriting chat front-ends).
+  // Uncomment if you find another extension in the user's setup
+  // shipping its own `languageModelChatProviders` contribution
+  // that shadows OKMD.
+  // "unwantedRecommendations": []
+}
