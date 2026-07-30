@@ -10,31 +10,123 @@ import {
   LanguageModelChatRequestMessage,
   ProvideLanguageModelChatResponseOptions,
 } from 'vscode';
-import { PROVIDER_ID, PROVIDER_NAME, PROVIDER_VENDOR } from './constants';
+import {
+  BUNDLED_FALLBACK_MODELS,
+  PROVIDER_ID,
+  PROVIDER_NAME,
+  PROVIDER_VENDOR,
+} from './constants';
 import { getCapabilities } from './capabilities';
 import { openaiToAnthropic } from './converters/openaiToAnthropic';
 import { ModelCache, OkmdModel } from './modelCache';
 import { postOkmd } from './okmdClient';
 import { parseOpenAiStream } from './streaming/openaiParser';
 import { parseAnthropicStream } from './streaming/anthropicParser';
-import { logInfo } from './logger';
+import { logInfo, logWarn } from './logger';
 import { mapHttpError } from './errorMapping';
 import { cancellationTokenToAbortSignal } from './utils/cancellation';
+import { getOkmdApiKey } from './api';
 
 export class OkmdChatProvider implements LanguageModelChatProvider {
+  private _onDidChangeInfo = new vscode.EventEmitter<void>();
+  readonly onDidChangeLanguageModelChatInformation =
+    this._onDidChangeInfo.event;
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly cache: ModelCache,
-  ) {}
+  ) {
+    // Relay cache change events to VS Code so the picker
+    // refreshes. NVIDIA NIM Provider (21K installs) ships the
+    // same event and is selectable in VS Code 1.120+, so the
+    // microsoft/vscode#317414 hypothesis is not the cause of
+    // the picker hiding OKMD models. The cause is the
+    // activation order in `extension.ts`: the migration to
+    // the VS Code LM provider group was racing with the
+    // cache load, so the platform's first
+    // `provideLanguageModelChatInformation` call returned 0
+    // models. See ADR-0005.
+    this.cache.onDidChange(() => this._onDidChangeInfo.fire());
+  }
+
+  /** Fire the model info changed event — called from outside
+   *  after key migration or manual refresh. Mirrors NVIDIA
+   *  NIM's `fireModelInfoChanged()` pattern. */
+  fireModelInfoChanged(): void {
+    this._onDidChangeInfo.fire();
+  }
 
   async provideLanguageModelChatInformation(
-    _options: { readonly silent: boolean },
+    options: { readonly silent: boolean },
     _token: vscode.CancellationToken,
   ): Promise<LanguageModelChatInformation[]> {
-    if (this.cache.getModels().length === 0) {
-      await this.cache.refresh();
+    // 1. BYOK path — VS Code 1.104+ may pass the API key in
+    //    `options.configuration`. Mirror the opencode-copilot-chat
+    //    `getConfiguredApiKey` pattern so the vendor does not
+    //    need to be re-resolved through secret storage when VS
+    //    Code has the key in hand.
+    const configured = (options as { configuration?: unknown }).configuration;
+    let apiKey: string | undefined;
+    if (configured && typeof configured === 'object') {
+      const fromConfig = (configured as { apiKey?: unknown }).apiKey;
+      if (typeof fromConfig === 'string' && fromConfig.trim().length > 0) {
+        apiKey = fromConfig.trim();
+      }
     }
-    return this.cache.getModels().map((m) => this.toChatInformation(m));
+
+    // 2. Fallback — secret storage. Only read when (a) the BYOK
+    //    path did not yield a key AND (b) VS Code actually called
+    //    us with a configuration object, not an undefined one.
+    //    The discriminator matters:
+    //    • configuration=undefined → VS Code is still resolving;
+    //      return [] and let it call again with the real BYOK key.
+    //    • configuration={apiKey:"sk-..."} → BYOK key resolved above.
+    //    • configuration={} → empty config (VS Code 1.126+ on
+    //      non-BYOK providers); fall through to secret storage.
+    if (!apiKey && configured !== undefined) {
+      apiKey = await getOkmdApiKey(this.context);
+    }
+
+    // 3. Not yet ready — return [] so the platform re-queries
+    //    us after the user completes the BYOK flow. Returning a
+    //    non-empty list with no apiKey would cause VS Code to
+    //    mark the provider group as "0 models" and hide it from
+    //    the picker (the same root cause ADR-0005 fixes on the
+    //    activation side).
+    if (!apiKey) {
+      return [];
+    }
+
+    // 4. If the cache is empty when the platform calls (e.g. on
+    //    the very first invocation after a fresh install) refresh
+    //    once. On subsequent calls the cache is populated from
+    //    `globalState` synchronously during activation, so this
+    //    branch is a no-op in the common case.
+    //
+    //    3-tier fallback (mirrors opencode-copilot-chat):
+    //    • cache hit        → use it
+    //    • network refresh  → try; on failure fall through
+    //    • bundled fallback → last resort so the vendor is never
+    //                          empty just because the network is
+    //                          flaky on a fresh install.
+    if (this.cache.getModels().length === 0) {
+      try {
+        await this.cache.refresh();
+      } catch (err) {
+        // The cache already logs its own warning. Swallow here
+        // so we can fall through to the bundled list and keep
+        // the picker visible.
+        logWarn(
+          'OKMD model-list refresh failed; falling back to bundled snapshot',
+          err,
+        );
+      }
+    }
+    let models = this.cache.getModels();
+    if (models.length === 0) {
+      models = BUNDLED_FALLBACK_MODELS;
+    }
+    return Promise.all(models.map((m) => this.toChatInformation(m, apiKey)));
   }
 
   async provideLanguageModelChatResponse(
@@ -44,7 +136,7 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken,
   ): Promise<void> {
-    const apiKey = await this.context.secrets.get('okmd.apiKey');
+    const apiKey = await getOkmdApiKey(this.context);
     if (!apiKey) {
       throw vscode.LanguageModelError.NoPermissions(
         'OKMD API key not configured. Open Copilot → Manage Models → OKMD to add it.',
@@ -67,6 +159,11 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     await this.dispatch(modelId, okmdName, messages, options, progress, apiKey, token);
   }
 
+  // The model id is now a string (per upstream), but the dispatch
+  // helper in the private section below still passes it through
+  // unchanged to the request body. No type cast needed; the request
+  // body accepts `unknown`.
+
   provideTokenCount(
     _model: LanguageModelChatInformation,
     _text: string | LanguageModelChatRequestMessage,
@@ -83,11 +180,29 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     throw new Error('OKMD token counting is not implemented in v1');
   }
 
-  private toChatInformation(m: OkmdModel): LanguageModelChatInformation {
+  private async toChatInformation(
+    m: OkmdModel,
+    apiKey?: string,
+  ): Promise<LanguageModelChatInformation> {
     const caps = getCapabilities(m.name);
+    // The `apiKey`, `detail`, `tooltip`, and `isUserSelectable: true`
+    // fields mirror the NVIDIA NIM Provider pattern. The public
+    // TypeScript type for `LanguageModelChatInformation` does not
+    // declare them in 1.104, so we cast through `unknown` to
+    // inject them at runtime. VS Code reads them from the
+    // returned object even though TypeScript can't see them.
+    //
+    // The `apiKey` argument is resolved by the caller (the BYOK
+    // discriminator in `provideLanguageModelChatInformation`)
+    // so we never need to read secret storage here. This keeps
+    // the model-info path synchronous in `Promise.all` and
+    // avoids the N-times secret-storage round trip the previous
+    // implementation had.
     return {
       id: `${PROVIDER_ID}/${m.name}`,
       name: `${m.name} (${PROVIDER_VENDOR})`,
+      detail: PROVIDER_NAME,
+      tooltip: `${PROVIDER_NAME} ${m.name}`,
       family: PROVIDER_NAME,
       version: '1',
       maxInputTokens: 128_000,
@@ -95,12 +210,13 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
       capabilities: caps.toolCalling
         ? { toolCalling: true, imageInput: false }
         : { toolCalling: false, imageInput: false },
-      // isDefault handled by the picker
-    };
+      isUserSelectable: true,
+      ...(apiKey ? { apiKey } : {}),
+    } as unknown as LanguageModelChatInformation;
   }
 
   private async dispatch(
-    modelId: number,
+    modelId: string,
     modelName: string,
     messages: readonly LanguageModelChatRequestMessage[],
     _options: ProvideLanguageModelChatResponseOptions,
