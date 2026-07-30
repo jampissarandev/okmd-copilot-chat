@@ -1,13 +1,16 @@
 /**
- * Integration tests for picker visibility in VS Code 1.120+.
+ * Regression guard for picker visibility in VS Code 1.120+.
  *
- * Mirrors the NVIDIA NIM Provider (hidenobunagai/nvidia-nim-provider)
- * pattern. NVIDIA NIM ships `onDidChangeLanguageModelChatInformation`
- * and is selectable with 21K installs, so the #317414 hypothesis
- * is NOT the cause of OKMD's hidden picker; the cause is the
- * activation-order race documented in ADR-0005 and the BYOK
- * `options.configuration` discriminator in
- * `tests/providerByokConfig.test.ts`.
+ * Per ADR-0005 (`docs/adr/0005-no-on-did-change-event.md`), the OKMD
+ * provider deliberately omits `onDidChangeLanguageModelChatInformation`.
+ * Its presence triggers `microsoft/vscode#317414`, which causes the
+ * Copilot Chat model picker to mis-render the vendor and hide the
+ * provider's models. This test pins the "no EventEmitter" contract
+ * so a future contributor cannot silently re-introduce the bug.
+ *
+ * The remaining assertions (every model has `isUserSelectable: true`,
+ * `detail`, `tooltip`) document the NVIDIA NIM Provider parity that
+ * the picker still relies on.
  */
 
 jest.mock('vscode');
@@ -45,9 +48,13 @@ function makeProvider(models: Array<{ id: string; name: string }> = []): OkmdCha
 }
 
 describe('OkmdChatProvider — picker visibility (NVIDIA NIM parity)', () => {
-  test('exposes onDidChangeLanguageModelChatInformation (NVIDIA NIM pattern)', () => {
+  test('does NOT expose onDidChangeLanguageModelChatInformation (vscode#317414 guard)', () => {
     const provider = makeProvider();
-    expect(provider.onDidChangeLanguageModelChatInformation).toBeDefined();
+    // Regression guard for microsoft/vscode#317414. The presence of
+    // this EventEmitter causes the LM picker to collapse the vendor
+    // label and hide the provider's models in VS Code 1.120+.
+    // See docs/adr/0005-no-on-did-change-event.md.
+    expect(provider.onDidChangeLanguageModelChatInformation).toBeUndefined();
   });
 
   test('every returned model has isUserSelectable: true', async () => {
