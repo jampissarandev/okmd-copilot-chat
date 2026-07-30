@@ -4,9 +4,19 @@
  *
  * The default endpoint is OpenAI-compatible. Names starting with `claude-`
  * are routed to the Anthropic endpoint.
+ *
+ * Tool capability: every OKMD model is reported as `toolCalling: true`.
+ * The OKMD gateway forwards tool calls to the underlying model
+ * (Claude, GPT-5, Gemini all support tools), so the picker can safely
+ * show all 23 models in Agent mode. VS Code 1.120+ filters BYOK
+ * models that are not `toolCalling` out of the picker in Agent mode
+ * (microsoft/vscode#296786); reporting `true` here is what makes
+ * OKMD show up at all. If a future model on the OKMD gateway does
+ * not support tools, the dispatch path will log an info line and
+ * pass the request through; the upstream will return a 4xx which
+ * `mapHttpError` surfaces to the chat UI (see `dispatch` in
+ * `provider.ts`).
  */
-
-import { TOOL_CAPABLE_MODELS } from './constants';
 
 export type EndpointKind = 'openai' | 'anthropic';
 
@@ -19,7 +29,7 @@ export function getCapabilities(modelName: string): ModelCapabilities {
   const endpoint: EndpointKind = modelName.startsWith('claude-') ? 'anthropic' : 'openai';
   return {
     endpoint,
-    toolCalling: TOOL_CAPABLE_MODELS.has(modelName),
+    toolCalling: true,
   };
 }
 

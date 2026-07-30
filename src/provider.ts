@@ -223,6 +223,20 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
     const caps = getCapabilities(modelName);
     logInfo(`Dispatching to ${caps.endpoint} for model ${modelName}`);
 
+    // Per microsoft/vscode#296786, the picker is gated on
+    // `capabilities.toolCalling === true`. The OKMD gateway
+    // forwards tool calls to the underlying model for every
+    // name we expose, so we advertise all models as tool-capable
+    // in `getCapabilities`. If a future model genuinely does
+    // not support tools, the upstream will return a 4xx which
+    // `mapHttpError` surfaces to the chat UI.
+    const hasTools = messages.some((m) =>
+      m.content.some((p) => p instanceof vscode.LanguageModelToolCallPart),
+    );
+    if (hasTools) {
+      logInfo(`[dispatch] model=${modelName} received tool call(s); relying on OKMD gateway forwarding`);
+    }
+
     if (caps.endpoint === 'anthropic') {
       const body = openaiToAnthropic(modelId, messages);
       await this.streamAnthropic(body, progress, apiKey, token);

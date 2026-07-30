@@ -7,68 +7,62 @@
  * contract — the `{ endpoint, toolCalling }` object — never the
  * internals of the lookup table.
  *
- * The whitelist itself (`TOOL_CAPABLE_MODELS` in `constants.ts`) is
- * asserted separately, because the whitelist is a hardcoded
- * artifact that the routing table reads from; if the two drift
- * (e.g. someone adds a name to the whitelist but forgets the
- * `claude-` prefix convention), the table test alone would not
- * catch it.
+ * **Every OKMD model is reported as `toolCalling: true`.** VS Code
+ * 1.120+ filters BYOK models that are not `toolCalling` out of the
+ * model picker (microsoft/vscode#296786). The OKMD gateway
+ * forwards tool calls to the underlying model for every name we
+ * expose, so reporting `true` here is what makes the picker show
+ * all 23 models in Agent mode. If a future model on the OKMD
+ * gateway does not support tools, the dispatch path will log a
+ * warning and skip the tool call (see `dispatch` in
+ * `provider.ts`).
  */
 
 jest.mock('vscode');
 
 import { getCapabilities } from '../src/capabilities';
-import { TOOL_CAPABLE_MODELS } from '../src/constants';
 
 type Case = {
   name: string;
   input: string;
   expectEndpoint: 'openai' | 'anthropic';
-  expectToolCalling: boolean;
 };
 
 const cases: Case[] = [
   {
-    name: 'claude-sonnet-4 is routed to anthropic and is tool-capable',
+    name: 'claude-sonnet-4 is routed to anthropic',
     input: 'claude-sonnet-4',
     expectEndpoint: 'anthropic',
-    expectToolCalling: true,
   },
   {
-    name: 'claude-opus-4 is routed to anthropic and is tool-capable',
+    name: 'claude-opus-4 is routed to anthropic',
     input: 'claude-opus-4',
     expectEndpoint: 'anthropic',
-    expectToolCalling: true,
   },
   {
-    name: 'gpt-5 is routed to openai and is tool-capable',
+    name: 'gpt-5 is routed to openai',
     input: 'gpt-5',
     expectEndpoint: 'openai',
-    expectToolCalling: true,
   },
   {
-    name: 'gemini-2.5-pro is routed to openai and is tool-capable',
+    name: 'gemini-2.5-pro is routed to openai',
     input: 'gemini-2.5-pro',
     expectEndpoint: 'openai',
-    expectToolCalling: true,
   },
   {
-    name: 'gemini-3.5-flash is not in the whitelist — openai + non-tool-capable',
+    name: 'gemini-3.5-flash is routed to openai',
     input: 'gemini-3.5-flash',
     expectEndpoint: 'openai',
-    expectToolCalling: false,
   },
   {
-    name: 'unknown name falls through to openai and is not tool-capable',
+    name: 'name without "claude-" prefix is routed to openai',
     input: 'some-future-model-9000',
     expectEndpoint: 'openai',
-    expectToolCalling: false,
   },
   {
-    name: 'empty name falls through to openai and is not tool-capable',
+    name: 'empty input is routed to openai',
     input: '',
     expectEndpoint: 'openai',
-    expectToolCalling: false,
   },
 ];
 
@@ -77,28 +71,28 @@ describe('getCapabilities — routing table', () => {
     test(c.name, () => {
       expect(getCapabilities(c.input)).toEqual({
         endpoint: c.expectEndpoint,
-        toolCalling: c.expectToolCalling,
+        toolCalling: true,
       });
     });
   }
 });
 
-describe('TOOL_CAPABLE_MODELS whitelist', () => {
-  test('contains exactly the four whitelisted names and no others', () => {
-    // The whitelist is hardcoded in `constants.ts`; this test pins
-    // the exact set so that future changes to the whitelist show up
-    // as a deliberate diff in this test, not as silent drift.
-    expect(new Set(TOOL_CAPABLE_MODELS)).toEqual(
-      new Set(['claude-sonnet-4', 'claude-opus-4', 'gpt-5', 'gemini-2.5-pro']),
-    );
-  });
-
-  test('every whitelisted name is tool-capable in the routing table', () => {
-    // Cross-check: the whitelist and the routing table must agree.
-    // If the prefix rule for `claude-` ever changes, the routing
-    // table and the whitelist would disagree on which Claude
-    // variants are tool-capable; this test catches that.
-    for (const name of TOOL_CAPABLE_MODELS) {
+describe('getCapabilities — all models are tool-capable (regression guard for microsoft/vscode#296786)', () => {
+  test('every input is reported as toolCalling: true', () => {
+    // The OKMD gateway forwards tool calls for every model. VS Code
+    // 1.120+ filters BYOK models that report toolCalling=false out
+    // of the model picker in Agent mode; this test pins the
+    // "always true" contract so a future refactor that brings
+    // back the whitelist cannot silently break the picker.
+    for (const name of [
+      'claude-sonnet-4',
+      'claude-opus-4',
+      'gpt-5',
+      'gemini-2.5-pro',
+      'gemini-3.5-flash',
+      'some-future-model-9000',
+      '',
+    ]) {
       expect(getCapabilities(name).toolCalling).toBe(true);
     }
   });

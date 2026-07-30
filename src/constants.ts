@@ -55,9 +55,22 @@ export const OKMD_USER_AGENT = 'okmd-for-copilot-chat/0.1.0 VSCode';
 /**
  * Hardcoded whitelist of models that are known to support tool calling.
  *
- * If a model name is not in this list, the extension still registers it,
- * but does not flag `toolCalling` in `LanguageModelChatInformation.capabilities`.
- * Future versions may replace this with a runtime probe (decision 3 / D).
+ * **As of 2026-07-30 this constant is no longer consulted by the
+ * routing table.** `getCapabilities` in `capabilities.ts` reports
+ * `toolCalling: true` unconditionally so that VS Code 1.120+ shows
+ * every OKMD model in the model picker (microsoft/vscode#296786).
+ * The whitelist is kept here for two future uses:
+ *
+ *   1. The `okmd.refreshToolCapability` command (decision 3/D)
+ *      displays this list to the user as a stand-in until a
+ *      per-model capability field is available from the OKMD
+ *      gateway's `/models` response.
+ *   2. As a regression-guard reference: any future `getCapabilities`
+ *      change that consults this list should also update the
+ *      microsoft/vscode#296786 regression guard in
+ *      `tests/capabilities.test.ts`.
+ *
+ * See ADR-0005 Follow-up #2 for the rationale.
  */
 export const TOOL_CAPABLE_MODELS: ReadonlySet<string> = new Set([
   'claude-sonnet-4',
