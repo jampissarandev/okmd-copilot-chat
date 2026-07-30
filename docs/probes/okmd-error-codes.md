@@ -138,7 +138,10 @@ confirmed by the probe.
 **No code change to `mapHttpError` is required for v1.** The
 existing branches cover all the cases we could test, and the
 new 422 status is correctly funnelled into the `Blocked`
-catch-all.
+catch-all. The unit test in `tests/errorMapping.test.ts` already
+covers 422 via the `'422 unprocessable entity → Blocked (catch-all)'`
+case (added in commit that closed #15), so the probe result
+matches the pinned test contract.
 
 ## Follow-up
 
