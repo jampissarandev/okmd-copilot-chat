@@ -175,18 +175,30 @@ export class OkmdChatProvider implements LanguageModelChatProvider {
 
   provideTokenCount(
     _model: LanguageModelChatInformation,
-    _text: string | LanguageModelChatRequestMessage,
-    _token: vscode.CancellationToken,
+    text: string | LanguageModelChatRequestMessage,
+    token: vscode.CancellationToken,
   ): Thenable<number> {
-    // v1 does not implement a real token count. The 1.104 contract
-    // requires *some* `Thenable<number>`; we throw so that Copilot
-    // Chat (and any future client UI that reads this number) gets a
-    // loud signal that the value is unavailable, rather than a
-    // silently-wrong number from a chars/4 heuristic. Per spec 0001
-    // §Token counting this function **must remain a stub** until
-    // issue #18 lands; any patch that silently swaps in a heuristic
-    // without updating the spec is a bug.
-    throw new Error('OKMD token counting is not implemented in v1');
+    // v1 token-counting strategy: chars/4 heuristic.
+    //
+    // `Math.ceil(text.length / 4)` for plain text, summed across
+    // `LanguageModelTextPart`s for a `LanguageModelChatRequestMessage`.
+    // Non-text parts (image, tool call, tool result) are skipped —
+    // the heuristic has no way to count them, and silently inflating
+    // the number would be worse than ignoring them.
+    //
+    // Limitations: ~30% off on non-English text and on code, and
+    // 0 for any image-only or tool-only message. Documented in
+    // spec 0001 §Token counting. This is intentionally
+    // cheap-to-compute and easy to swap out: a future v2 can replace
+    // this body with a `/tokenize` probe or a `usage.prompt_tokens`
+    // lookup without changing the function signature.
+    return new Promise<number>((resolve, reject) => {
+      if (token.isCancellationRequested) {
+        reject(new Error('cancelled'));
+        return;
+      }
+      resolve(countTokens(text));
+    });
   }
 
   private async toChatInformation(
@@ -363,4 +375,26 @@ async function readStreamToText(stream: ReadableStream<Uint8Array>): Promise<str
   } finally {
     reader.releaseLock();
   }
+}
+
+/**
+ * Approximate token count for the v1 chars/4 heuristic.
+ *
+ * Plain strings are measured as `Math.ceil(length / 4)`. A
+ * `LanguageModelChatRequestMessage` is the sum of its text parts,
+ * skipping every non-text part (images, tool calls, tool results).
+ */
+function countTokens(
+  text: string | vscode.LanguageModelChatRequestMessage,
+): number {
+  if (typeof text === 'string') {
+    return Math.ceil(text.length / 4);
+  }
+  let total = 0;
+  for (const part of text.content) {
+    if (part instanceof vscode.LanguageModelTextPart) {
+      total += Math.ceil(part.value.length / 4);
+    }
+  }
+  return total;
 }

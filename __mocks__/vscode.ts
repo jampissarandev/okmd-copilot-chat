@@ -84,6 +84,18 @@ export class LanguageModelDataPart {
 }
 
 /**
+ * Tool-result part. Counterpart to a `LanguageModelToolCallPart`.
+ * The mock's constructor takes a `callId` and a content array, matching
+ * the real type.
+ */
+export class LanguageModelToolResultPart {
+  constructor(
+    public readonly callId: string,
+    public readonly content: ReadonlyArray<unknown>,
+  ) {}
+}
+
+/**
  * Stub for `vscode.window` — the logger uses `createOutputChannel`.
  * Tests that don't need the Output Channel can leave the channel
  * methods as no-ops; tests that want to assert on log output can

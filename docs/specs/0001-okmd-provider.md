@@ -169,20 +169,34 @@ picker. There is no separate command palette for key management in v1.
   synchronous-looking: it returns a `Thenable<number>`. The number is
   used by Copilot Chat to display input-token hints ("X tokens
   remaining" etc.) and to enforce a per-request budget.
-- v1 does **not** implement a real count. The implementation throws
-  `Error('OKMD token counting is not implemented in v1')` so that
-  Copilot Chat (and any future client UI) gets a loud signal that the
-  number is unavailable rather than a silent wrong number. Throwing
-  is preferred over returning `0` or `-1`: a `0` would be
-  interpreted as "the request is empty" and a `-1` would be
-  interpreted as a valid count. See issue #14.
-- The exact strategy (chars/4 heuristic, OKMD `/tokenize` probe, or
-  `usage.prompt_tokens` from a `max_tokens: 1` call) is deferred to a
-  follow-up issue (#18). The chosen strategy will be recorded in
-  this spec under a new section and, if it is hard to reverse, in a
-  new ADR.
-- Until then, the function must remain a stub. Any patch that
-  silently swaps in a heuristic without updating this spec is a bug.
+- **v1 strategy: chars/4 heuristic** (issue #18, landed). For a
+  `string` input, return `Math.ceil(text.length / 4)`. For a
+  `LanguageModelChatRequestMessage`, sum `Math.ceil(part.value.length / 4)`
+  across each `LanguageModelTextPart` and skip every other part
+  type (`LanguageModelDataPart`, `LanguageModelToolCallPart`,
+  `LanguageModelToolResultPart`, and any unknown part).
+- The heuristic is **an approximation, not a real token count**. It
+  is off by ~30% on non-English text and on code, and it returns
+  `0` for any request composed entirely of images or tool parts.
+  The approximation is a deliberate trade: it is cheap (no
+  network, no extra API key round-trip), deterministic, easy to
+  test, and trivially replaceable in a future v2 by an OKMD
+  `/tokenize` probe or a `usage.prompt_tokens` lookup. See
+  issue #18 for the rejected alternatives.
+- An already-cancelled `CancellationToken` makes the returned
+  thenable reject with `Error('cancelled')`. The function does
+  no async work, but the contract is enforced to match the
+  rest of the provider's behaviour.
+- The implementation is a single helper,
+  `countTokens(text): number`, defined in `src/provider.ts`.
+  `provideTokenCount` wraps it in a `Promise` that honours the
+  cancellation token. The helper is intentionally a private
+  module-level function: tests exercise it indirectly through
+  the public `provideTokenCount` seam, so no separate export
+  is needed.
+- The previous `throw new Error('not implemented')` stub
+  (issue #14) is removed. Replacing it was the explicit goal of
+  issue #18.
 
 ### Error handling
 

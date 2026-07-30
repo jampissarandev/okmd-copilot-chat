@@ -104,6 +104,34 @@ sequence is wrong; see [Troubleshooting](#no-okmd-in-picker).
 - [ ] Send a message; reply streams chunk-by-chunk
 - [ ] Output Channel shows: `Dispatching to anthropic for model claude-sonnet-4`
 
+### 4.1. Token count hint
+
+VS Code's chat input box shows a live token count (e.g. "X tokens"
+near the model picker) that is fed by `provideTokenCount`. After
+landing the v1 chars/4 heuristic (issue #19), the hint must
+appear for **both** plain text and a `LanguageModelChatRequestMessage`,
+and the chat step must not throw `OKMD token counting is not
+implemented in v1`.
+
+- [ ] Click into the chat input box and type a short message
+      (e.g. `hello world`) — the token-count hint appears
+      (≈ 3 tokens with the v1 chars/4 heuristic). It updates
+      live as characters are added or removed.
+- [ ] Clear the input box — the hint reads 0 tokens, no
+      `Error: OKMD token counting is not implemented in v1`
+      appears in the Output Channel or as a chat error toast.
+- [ ] Paste a multi-line prompt — the hint grows roughly
+      proportionally to the character count. The exact number
+      is an approximation; the assertion is that **some
+      non-zero number is shown and no error fires**.
+- [ ] Pick a Claude model and repeat — the same hint appears;
+      no error fires. (Claude goes through the Anthropic
+      endpoint but the token-count heuristic is
+      endpoint-agnostic.)
+- [ ] Output Channel does **not** contain
+      `OKMD token counting is not implemented in v1` at any
+      point during the smoke test.
+
 ## 5. Cancellation
 
 - [ ] Send a long prompt
