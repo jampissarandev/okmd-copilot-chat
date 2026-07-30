@@ -8,12 +8,27 @@
  *   - `LanguageModelError` factories used by `errorMapping.ts`.
  *   - `LanguageModelTextPart` / `LanguageModelToolCallPart` for the
  *     SSE stream parsers.
+ *   - `LanguageModelDataPart` for the image-converter path in
+ *     `src/converters/openaiToAnthropic.ts`.
+ *   - `LanguageModelChatMessageRole` enum used by
+ *     `src/provider.ts` `messageRole`.
+ *   - `window.createOutputChannel` for `src/logger.ts`.
+ *   - `CancellationToken` / `CancellationTokenSource` for
+ *     `src/utils/cancellation.ts`.
+ *   - `EventEmitter<T>` for `src/modelCache.ts` `_onDidChange`.
  *
  * Tests should not need to pass a `vscode` stub to the code under
  * test for the things covered here; the mock lets the real `import
  * 'vscode'` lines resolve. Code that wants to be exercised without
  * the real `vscode` module (e.g. `errorMapping.ts`) takes an
  * injectable `vscode` parameter — see the `VscodeLike` interface.
+ *
+ * **Not yet stubbed:** `vscode.lm.registerLanguageModelChatProvider`,
+ * `vscode.commands.registerCommand`, `vscode.window.showInputBox`,
+ * `vscode.window.showInformationMessage`, `vscode.window.showErrorMessage`.
+ * Modules that exercise these (`src/extension.ts`) are not directly
+ * tested in the unit suite; the smoke test in `scripts/smoke-test.md`
+ * covers them manually.
  */
 
 export class LanguageModelError extends Error {
@@ -115,5 +130,19 @@ export class CancellationTokenSource {
     for (const l of this.listeners) {
       l();
     }
+  }
+}
+
+export class EventEmitter<T> {
+  private listeners: Array<(e: T) => void> = [];
+  readonly event = (listener: (e: T) => void): { dispose(): void } => {
+    this.listeners.push(listener);
+    return { dispose: () => { this.listeners = this.listeners.filter((l) => l !== listener); } };
+  };
+  fire(data: T): void {
+    for (const l of this.listeners) l(data);
+  }
+  dispose(): void {
+    this.listeners = [];
   }
 }

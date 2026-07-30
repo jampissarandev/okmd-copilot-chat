@@ -22,7 +22,7 @@ export type AnthropicContentBlock =
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
 export interface AnthropicRequestBody {
-  model: number;
+  model: string;
   system?: string;
   messages: AnthropicMessage[];
   stream: true;
@@ -30,7 +30,7 @@ export interface AnthropicRequestBody {
 }
 
 export function openaiToAnthropic(
-  modelId: number,
+  modelId: string,
   vscodeMessages: readonly vscode.LanguageModelChatRequestMessage[],
 ): AnthropicRequestBody {
   const messages: AnthropicMessage[] = [];

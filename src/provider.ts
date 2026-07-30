@@ -28,32 +28,28 @@ import { cancellationTokenToAbortSignal } from './utils/cancellation';
 import { getOkmdApiKey } from './api';
 
 export class OkmdChatProvider implements LanguageModelChatProvider {
-  private _onDidChangeInfo = new vscode.EventEmitter<void>();
-  readonly onDidChangeLanguageModelChatInformation =
-    this._onDidChangeInfo.event;
-
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly cache: ModelCache,
   ) {
-    // Relay cache change events to VS Code so the picker
-    // refreshes. NVIDIA NIM Provider (21K installs) ships the
-    // same event and is selectable in VS Code 1.120+, so the
-    // microsoft/vscode#317414 hypothesis is not the cause of
-    // the picker hiding OKMD models. The cause is the
-    // activation order in `extension.ts`: the migration to
-    // the VS Code LM provider group was racing with the
-    // cache load, so the platform's first
-    // `provideLanguageModelChatInformation` call returned 0
-    // models. See ADR-0005.
-    this.cache.onDidChange(() => this._onDidChangeInfo.fire());
-  }
-
-  /** Fire the model info changed event — called from outside
-   *  after key migration or manual refresh. Mirrors NVIDIA
-   *  NIM's `fireModelInfoChanged()` pattern. */
-  fireModelInfoChanged(): void {
-    this._onDidChangeInfo.fire();
+    // VS Code 1.120+ has a confirmed bug
+    // (microsoft/vscode#317414): the mere *presence* of an
+    // `onDidChangeLanguageModelChatInformation` EventEmitter on
+    // the provider instance — even if never fired — causes the
+    // LM picker to mis-render the vendor. The user confirmed
+    // this on the ExtDev Host with an alternating pattern of
+    // `provideLanguageModelChatInformation` calls (14+
+    // alternations in one activation) where every call returned
+    // 23 models but the picker never showed OKMD. Removing the
+    // EventEmitter eliminates the trigger.
+    //
+    // Trade-off: the picker no longer auto-refreshes when the
+    // cache changes. The user runs the `okmd.refreshModelList`
+    // command (or reloads the window) to pick up new models.
+    // The ADR-0005 activation-order race hypothesis is the
+    // secondary contributor; the EventEmitter is the primary
+    // cause, and this is the documented workaround. See
+    // ADR-0005 Follow-up.
   }
 
   async provideLanguageModelChatInformation(
